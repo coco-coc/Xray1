@@ -130,7 +130,7 @@ install_xray() {
             esac
             
             # 直接下载最新版
-            DOWNLOAD_URL="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${ARCH}.zip"
+            DOWNLOAD_URL="https://git.1314k.tk/https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${ARCH}.zip"
             LATEST_FILE="Xray-linux-${ARCH}.zip"
             
             echo "下载链接: $DOWNLOAD_URL"
