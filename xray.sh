@@ -173,7 +173,7 @@ if [[ "$PROTOCOL" == "vless" && "$VLESS_TYPE" == "Reality" ]]; then
     green "private_key: $PRIVATE_KEY"
     green "public_key: $PUBLIC_KEY"
     ...
-    fi
+fi
 
         # 生成短ID
         SHORT_ID=$(dd bs=4 count=2 if=/dev/urandom 2>/dev/null | xxd -p -c 8)
