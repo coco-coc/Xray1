@@ -146,38 +146,34 @@ install_xray() {
         download_xray
     fi
 
-    # 生成Reality密钥对和短ID（必须在Xray存在之后）
-    PRIVATE_KEY=""
-    PUBLIC_KEY=""
-    SHORT_ID=""
-    if [[ "$PROTOCOL" == "vless" && "$VLESS_TYPE" == "Reality" ]]; then
-        yellow "正在生成Reality密钥对..."
-        local keys_output
-        keys_output=$(/root/Xray/xray x25519 2>&1)
-        if [[ $? -ne 0 ]]; then
-            red "生成密钥对失败，请检查Xray是否正常"
-            exit 1
-        fi
+    # 生成Reality密钥对和短ID
+if [[ "$PROTOCOL" == "vless" && "$VLESS_TYPE" == "Reality" ]]; then
+    yellow "正在生成Reality密钥对..."
+    local keys_output
+    keys_output=$(/root/Xray/xray x25519 2>&1)
+    if [[ $? -ne 0 ]]; then
+        red "生成密钥对失败，请检查Xray是否正常"
+        exit 1
+    fi
 
-        # 兼容新旧输出格式：新格式为 "secret: <私钥>" 和 "Hash32: <公钥>"，旧格式为单行包含 Private key 和 Public key
-        PRIVATE_KEY=$(echo "$keys_output" | grep -i 'private key' | awk -F ': ' '{print $2}' | tail -1)
-        if [[ -z "$PRIVATE_KEY" ]]; then
-            # 尝试新格式 "secret:"
-            PRIVATE_KEY=$(echo "$keys_output" | grep 'secret:' | awk '{print $2}')
-        fi
-        PUBLIC_KEY=$(echo "$keys_output" | grep -i 'public key' | awk -F ': ' '{print $2}' | tail -1)
-        if [[ -z "$PUBLIC_KEY" ]]; then
-            # 尝试新格式 "Hash32:"
-            PUBLIC_KEY=$(echo "$keys_output" | grep 'Hash32:' | awk '{print $2}')
-        fi
+    # 从所有可能的行中提取私钥（不区分大小写，冒号分隔）
+    PRIVATE_KEY=$(echo "$keys_output" | grep -iE '^\s*(PrivateKey|secret)\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
+    
+    # 提取公钥：优先 Hash32 行，其次 PublicKey 行，再次 public key 行
+    PUBLIC_KEY=$(echo "$keys_output" | grep -iE '^\s*Hash32\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
+    if [[ -z "$PUBLIC_KEY" ]]; then
+        PUBLIC_KEY=$(echo "$keys_output" | grep -iE '^\s*(PublicKey|public key)\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
+    fi
 
-        if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
-            red "无法解析密钥对，请手动运行 /root/Xray/xray x25519 检查输出格式"
-            exit 1
-        fi
+    if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
+        red "无法解析密钥对，请手动运行 /root/Xray/xray x25519 检查输出格式"
+        exit 1
+    fi
 
-        green "private_key: $PRIVATE_KEY"
-        green "public_key: $PUBLIC_KEY"
+    green "private_key: $PRIVATE_KEY"
+    green "public_key: $PUBLIC_KEY"
+    ...
+    fi
 
         # 生成短ID
         SHORT_ID=$(dd bs=4 count=2 if=/dev/urandom 2>/dev/null | xxd -p -c 8)
