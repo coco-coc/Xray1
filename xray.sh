@@ -142,43 +142,37 @@ install_xray() {
     fi
 
     # 确保 Xray 二进制文件存在（统一在此下载）
-    if [[ ! -f "/root/Xray/xray" ]]; then
+    if [[ ! -f "/usr/local/bin/xray" ]]; then
         download_xray
     fi
 
-    # 生成Reality密钥对和短ID
-if [[ "$PROTOCOL" == "vless" && "$VLESS_TYPE" == "Reality" ]]; then
-    yellow "正在生成Reality密钥对..."
-    local keys_output
-    keys_output=$(/root/Xray/xray x25519 2>&1)
-    if [[ $? -ne 0 ]]; then
-        red "生成密钥对失败，请检查Xray是否正常"
-        exit 1
-    fi
-
-    # 从所有可能的行中提取私钥（不区分大小写，冒号分隔）
-    PRIVATE_KEY=$(echo "$keys_output" | grep -iE '^\s*(PrivateKey|secret)\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
-    
-    # 提取公钥：优先 Hash32 行，其次 PublicKey 行，再次 public key 行
-    PUBLIC_KEY=$(echo "$keys_output" | grep -iE '^\s*Hash32\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
-    if [[ -z "$PUBLIC_KEY" ]]; then
-        PUBLIC_KEY=$(echo "$keys_output" | grep -iE '^\s*(PublicKey|public key)\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
-    fi
-
-    if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
-        red "无法解析密钥对，请手动运行 /root/Xray/xray x25519 检查输出格式"
-        exit 1
-    fi
-
-    green "private_key: $PRIVATE_KEY"
-    green "public_key: $PUBLIC_KEY"
-
-        # 生成短ID
-        SHORT_ID=$(dd bs=4 count=2 if=/dev/urandom 2>/dev/null | xxd -p -c 8)
-        if [[ -z "$SHORT_ID" ]]; then
-            SHORT_ID=$(openssl rand -hex 8 | cut -c1-8)
+    # 生成Reality密钥对 (已移除短ID)
+    if [[ "$PROTOCOL" == "vless" && "$VLESS_TYPE" == "Reality" ]]; then
+        yellow "正在生成Reality密钥对..."
+        local keys_output
+        keys_output=$(/usr/local/bin/xray x25519 2>&1)
+        if [[ $? -ne 0 ]]; then
+            red "生成密钥对失败，请检查Xray是否正常"
+            exit 1
         fi
-        green "short_id: $SHORT_ID"
+
+        # 从所有可能的行中提取私钥（不区分大小写，冒号分隔）
+        PRIVATE_KEY=$(echo "$keys_output" | grep -iE '^\s*(PrivateKey|secret)\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
+        
+        # 提取公钥：优先 Hash32 行，其次 PublicKey 行，再次 public key 行
+        PUBLIC_KEY=$(echo "$keys_output" | grep -iE '^\s*Hash32\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
+        if [[ -z "$PUBLIC_KEY" ]]; then
+            PUBLIC_KEY=$(echo "$keys_output" | grep -iE '^\s*(PublicKey|public key)\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
+        fi
+
+        if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
+            red "无法解析密钥对，请手动运行 /usr/local/bin/xray x25519 检查输出格式"
+            exit 1
+        fi
+
+        green "private_key: $PRIVATE_KEY"
+        green "public_key: $PUBLIC_KEY"
+        green "短ID(ShortId): 已配置为免短ID"
     fi
 
     # 端口配置
@@ -228,16 +222,18 @@ download_xray() {
         exit 1
     fi
 
-    mkdir -p /root/Xray
-    unzip -o -d /root/Xray "$LATEST_FILE"
-    if [[ -f "/root/Xray/xray" ]]; then
-        chmod +x /root/Xray/xray
+    mkdir -p /tmp/xray_temp
+    unzip -o -d /tmp/xray_temp "$LATEST_FILE"
+    if [[ -f "/tmp/xray_temp/xray" ]]; then
+        mv /tmp/xray_temp/xray /usr/local/bin/xray
+        chmod +x /usr/local/bin/xray
         green "Xray 安装成功！"
-        rm -f "$LATEST_FILE"
     else
         red "解压后未找到 xray 可执行文件"
+        rm -rf /tmp/xray_temp "$LATEST_FILE"
         exit 1
     fi
+    rm -rf /tmp/xray_temp "$LATEST_FILE"
 }
 
 # Xray依赖安装（带检测）- 修复Alpine nc-openbsd问题
@@ -322,8 +318,8 @@ setup_service() {
 #!/sbin/openrc-run
 name="xray"
 description="Xray Service"
-command="/root/Xray/xray"
-command_args="-config /root/Xray/config.json"
+command="/usr/local/bin/xray"
+command_args="-config /usr/local/etc/xray/config.json"
 pidfile="/run/xray.pid"
 respawn_delay=5
 rc_ulimit="-n 30000"
@@ -373,7 +369,7 @@ Description=Xray Service
 After=network.target
 
 [Service]
-ExecStart=/root/Xray/xray -config /root/Xray/config.json
+ExecStart=/usr/local/bin/xray -config /usr/local/etc/xray/config.json
 Restart=always
 User=root
 LimitNOFILE=30000
@@ -392,6 +388,9 @@ EOF
 
 # Xray证书配置 - 增强版（带循环验证）
 setup_certificates() {
+    mkdir -p /usr/local/etc/xray
+    chmod 700 /usr/local/etc/xray
+    
     while true; do
         read -p "请选择：1.已上传证书文件，输入证书路径；2.未上传证书，直接输入证书内容.(默认选择1)： " is_path
         [[ -z $is_path ]] && is_path=1
@@ -423,9 +422,6 @@ setup_certificates() {
                 fi
             done
         else
-            mkdir -p /root/Xray
-            chmod 700 /root/Xray
-
             while true; do
                 yellow "请输入证书内容（输入空行结束）："
                 cert_txt=""
@@ -435,8 +431,8 @@ setup_certificates() {
                     fi
                     cert_txt+="$line\n"
                 done
-                echo -e "$cert_txt" | sed '/^$/d' > /root/Xray/domain.crt
-                yellow "证书被保存在：/root/Xray/domain.crt"
+                echo -e "$cert_txt" | sed '/^$/d' > /usr/local/etc/xray/domain.crt
+                yellow "证书被保存在：/usr/local/etc/xray/domain.crt"
 
                 yellow "请输入对应的key内容（输入空行结束）："
                 key_txt=""
@@ -446,15 +442,15 @@ setup_certificates() {
                     fi
                     key_txt+="$line\n"
                 done
-                echo -e "$key_txt" | sed '/^$/d' > /root/Xray/domain.key
-                yellow "证书被保存在：/root/Xray/domain.key"
+                echo -e "$key_txt" | sed '/^$/d' > /usr/local/etc/xray/domain.key
+                yellow "证书被保存在：/usr/local/etc/xray/domain.key"
 
-                cert_md5=$(openssl x509 -noout -modulus -in /root/Xray/domain.crt 2>/dev/null | openssl md5 | cut -d' ' -f2)
-                key_md5=$(openssl rsa -noout -modulus -in /root/Xray/domain.key 2>/dev/null | openssl md5 | cut -d' ' -f2)
+                cert_md5=$(openssl x509 -noout -modulus -in /usr/local/etc/xray/domain.crt 2>/dev/null | openssl md5 | cut -d' ' -f2)
+                key_md5=$(openssl rsa -noout -modulus -in /usr/local/etc/xray/domain.key 2>/dev/null | openssl md5 | cut -d' ' -f2)
 
                 if [[ "$cert_md5" == "$key_md5" ]]; then
-                    CERT_PATH="/root/Xray/domain.crt"
-                    KEY_PATH="/root/Xray/domain.key"
+                    CERT_PATH="/usr/local/etc/xray/domain.crt"
+                    KEY_PATH="/usr/local/etc/xray/domain.key"
                     green "√ 证书验证通过"
                     break 2
                 else
@@ -473,6 +469,8 @@ setup_certificates() {
 
 # Xray生成协议配置
 generate_config() {
+    mkdir -p /usr/local/etc/xray
+    
     local LISTEN_IPV6='"listen": "::",'
     local DOMAIN_STRATEGY='"domainStrategy": "UseIP"'
 
@@ -486,7 +484,7 @@ generate_config() {
                 }],
                 \"serverName\": \"$DOMAIN\"
             }"
-            cat << EOF > /root/Xray/config.json
+            cat << EOF > /usr/local/etc/xray/config.json
 {
     "log": {
         "loglevel": "warning",
@@ -529,7 +527,7 @@ EOF
                 }],
                 \"serverName\": \"$DOMAIN\"
             }"
-            cat << EOF > /root/Xray/config.json
+            cat << EOF > /usr/local/etc/xray/config.json
 {
     "log": {
         "loglevel": "warning",
@@ -566,7 +564,7 @@ EOF
         "vless")
             if [[ "$VLESS_TYPE" == "Reality" ]]; then
                 local CLIENT_CONFIG="\"id\": \"$UUID\", \"flow\": \"xtls-rprx-vision\""
-                cat << EOF > /root/Xray/config.json
+                cat << EOF > /usr/local/etc/xray/config.json
 {
     "log": {
         "loglevel": "warning",
@@ -596,7 +594,7 @@ EOF
                 "maxClientVer": "",
                 "maxTimeDiff": 0,
                 "shortIds": [
-                    "$SHORT_ID"
+                    ""
                 ]
             },
             "packetEncoding": "xudp"
@@ -624,7 +622,7 @@ EOF
                     }],
                     \"serverName\": \"$DOMAIN\"
                 }"
-                cat << EOF > /root/Xray/config.json
+                cat << EOF > /usr/local/etc/xray/config.json
 {
     "log": {
         "loglevel": "warning",
@@ -660,7 +658,7 @@ EOF
             fi
             ;;
         "shadowsocks")
-            cat << EOF > /root/Xray/config.json
+            cat << EOF > /usr/local/etc/xray/config.json
 {
     "log": {
         "loglevel": "warning",
@@ -687,7 +685,7 @@ EOF
 EOF
             ;;
         "socks")
-            cat << EOF > /root/Xray/config.json
+            cat << EOF > /usr/local/etc/xray/config.json
 {
     "log": {
         "loglevel": "warning",
@@ -774,7 +772,7 @@ EOF
             ;;
         "vless")
             if [[ "$VLESS_TYPE" == "Reality" ]]; then
-                local VLESS_LINK="vless://${UUID}@${SERVER_IP}:${IN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DEST_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none&packetEncoding=xudp#Vless-Reality"
+                local VLESS_LINK="vless://${UUID}@${SERVER_IP}:${IN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DEST_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&type=tcp&headerType=none&packetEncoding=xudp#Vless-Reality"
                 green "VLESS (Reality with XUDP) 链接：\n$VLESS_LINK"
             else
                 local VLESS_LINK="vless://${UUID}@${DOMAIN}:${IN_PORT}?security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=${WS_PATH}#Xray_VLESS"
@@ -1324,7 +1322,7 @@ EOF
 
 # ============================== 卸载功能 ==============================
 uninstall_xray() {
-    if [ ! -f "/root/Xray/xray" ]; then
+    if [ ! -f "/usr/local/bin/xray" ]; then
         red "未找到 Xray 安装文件，可能未安装 Xray 服务！"
         sleep 2
         return
@@ -1343,7 +1341,8 @@ uninstall_xray() {
             systemctl daemon-reload
             ;;
     esac
-    rm -rf /root/Xray
+    rm -f /usr/local/bin/xray
+    rm -rf /usr/local/etc/xray
     rm -f /var/log/xray*.log
     green "Xray 已成功卸载！"
     sleep 2
@@ -1406,20 +1405,20 @@ uninstall_anytls_go() {
 
 # ============================== 显示客户端链接 ==============================
 show_xray_links() {
-    if [ ! -f "/root/Xray/config.json" ]; then
+    if [ ! -f "/usr/local/etc/xray/config.json" ]; then
         red "未找到 Xray 配置文件，请先安装 Xray！"
         sleep 2
         return
     fi
 
-    PROTOCOL=$(grep -A10 'inbounds' /root/Xray/config.json | grep '"protocol":' | head -1 | awk -F'"' '{print $4}')
+    PROTOCOL=$(grep -A10 'inbounds' /usr/local/etc/xray/config.json | grep '"protocol":' | head -1 | awk -F'"' '{print $4}')
     SERVER_IP=$(get_public_ip)
 
     case "$PROTOCOL" in
         "vmess"|"vless"|"trojan")
-            DOMAIN=$(grep -A10 'tlsSettings' /root/Xray/config.json | grep '"serverName":' | head -1 | awk -F'"' '{print $4}')
-            WS_PATH=$(grep -A10 'wsSettings' /root/Xray/config.json | grep '"path":' | head -1 | awk -F'"' '{print $4}')
-            IN_PORT=$(grep '"port":' /root/Xray/config.json | head -1 | awk '{print $2}' | tr -d ',')
+            DOMAIN=$(grep -A10 'tlsSettings' /usr/local/etc/xray/config.json | grep '"serverName":' | head -1 | awk -F'"' '{print $4}')
+            WS_PATH=$(grep -A10 'wsSettings' /usr/local/etc/xray/config.json | grep '"path":' | head -1 | awk -F'"' '{print $4}')
+            IN_PORT=$(grep '"port":' /usr/local/etc/xray/config.json | head -1 | awk '{print $2}' | tr -d ',')
 
             if [ -z "$DOMAIN" ]; then
                 DOMAIN=$SERVER_IP
@@ -1427,7 +1426,7 @@ show_xray_links() {
 
             case "$PROTOCOL" in
                 "vmess")
-                    UUID=$(grep -A10 'clients' /root/Xray/config.json | grep '"id":' | head -1 | awk -F'"' '{print $4}')
+                    UUID=$(grep -A10 'clients' /usr/local/etc/xray/config.json | grep '"id":' | head -1 | awk -F'"' '{print $4}')
                     VMESS_JSON=$(cat <<EOF
 {
     "v": "2",
@@ -1451,9 +1450,9 @@ EOF
                     green "$VMESS_LINK"
                     ;;
                 "trojan")
-                    PASSWORD=$(grep -A10 '"protocol": "trojan"' /root/Xray/config.json | grep -A5 '"clients"' | grep '"password"' | head -1 | awk -F'"' '{print $4}')
+                    PASSWORD=$(grep -A10 '"protocol": "trojan"' /usr/local/etc/xray/config.json | grep -A5 '"clients"' | grep '"password"' | head -1 | awk -F'"' '{print $4}')
                     if [ -z "$PASSWORD" ]; then
-                        PASSWORD=$(grep -A10 'trojan' /root/Xray/config.json | grep '"password"' | head -1 | awk -F'"' '{print $4}')
+                        PASSWORD=$(grep -A10 'trojan' /usr/local/etc/xray/config.json | grep '"password"' | head -1 | awk -F'"' '{print $4}')
                     fi
                     if [ -z "$PASSWORD" ]; then
                         red "无法提取Trojan密码，请检查配置文件"
@@ -1464,22 +1463,22 @@ EOF
                     fi
                     ;;
                 "vless")
-                    UUID=$(grep -A10 'clients' /root/Xray/config.json | grep '"id":' | head -1 | awk -F'"' '{print $4}')
-                    if grep -q '"security": "reality"' /root/Xray/config.json; then
-                        DEST_SERVER=$(grep -A10 'realitySettings' /root/Xray/config.json | grep 'dest' | awk -F'"' '{print $4}' | cut -d: -f1)
-                        SHORT_ID=$(grep -A10 'realitySettings' /root/Xray/config.json | grep 'shortIds' -A1 | tail -1 | tr -d '", ')
-                        # 尝试从配置提取公钥（配置里只有私钥，但我们可以通过xray x25519重新生成公钥？这里简化处理）
-                        PRIVATE_KEY=$(grep -A10 'realitySettings' /root/Xray/config.json | grep 'privateKey' | awk -F'"' '{print $4}')
+                    UUID=$(grep -A10 'clients' /usr/local/etc/xray/config.json | grep '"id":' | head -1 | awk -F'"' '{print $4}')
+                    if grep -q '"security": "reality"' /usr/local/etc/xray/config.json; then
+                        DEST_SERVER=$(grep -A10 'realitySettings' /usr/local/etc/xray/config.json | grep 'dest' | awk -F'"' '{print $4}' | cut -d: -f1)
+                        PRIVATE_KEY=$(grep -A10 'realitySettings' /usr/local/etc/xray/config.json | grep 'privateKey' | awk -F'"' '{print $4}')
+                        
                         # 重新生成公钥用于显示（需要Xray存在）
-                        if [[ -f "/root/Xray/xray" ]]; then
-                            PUBLIC_KEY=$(/root/Xray/xray x25519 -i "$PRIVATE_KEY" 2>/dev/null | grep 'Public key' | awk -F ': ' '{print $2}')
+                        if [[ -f "/usr/local/bin/xray" ]]; then
+                            PUBLIC_KEY=$(/usr/local/bin/xray x25519 -i "$PRIVATE_KEY" 2>/dev/null | grep 'Public key' | awk -F ': ' '{print $2}')
                             if [[ -z "$PUBLIC_KEY" ]]; then
                                 PUBLIC_KEY="无法获取公钥，请查看安装时的输出"
                             fi
                         else
                             PUBLIC_KEY="Xray二进制不存在，无法计算公钥"
                         fi
-                        VLESS_LINK="vless://${UUID}@${SERVER_IP}:${IN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DEST_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none&packetEncoding=xudp#Vless-Reality"
+                        # 去除了短ID(&sid=)的分享链接
+                        VLESS_LINK="vless://${UUID}@${SERVER_IP}:${IN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DEST_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&type=tcp&headerType=none&packetEncoding=xudp#Vless-Reality"
                         blue "\n=============== VLESS (Reality) 客户端链接 ================"
                         green "$VLESS_LINK"
                     else
@@ -1491,17 +1490,17 @@ EOF
             esac
             ;;
         "shadowsocks")
-            IN_PORT=$(grep '"port":' /root/Xray/config.json | head -1 | awk '{print $2}' | tr -d ',')
-            METHOD=$(grep '"method":' /root/Xray/config.json | awk -F'"' '{print $4}')
-            PASSWORD=$(grep '"password":' /root/Xray/config.json | awk -F'"' '{print $4}')
+            IN_PORT=$(grep '"port":' /usr/local/etc/xray/config.json | head -1 | awk '{print $2}' | tr -d ',')
+            METHOD=$(grep '"method":' /usr/local/etc/xray/config.json | awk -F'"' '{print $4}')
+            PASSWORD=$(grep '"password":' /usr/local/etc/xray/config.json | awk -F'"' '{print $4}')
             SS_LINK="ss://$(echo -n "${METHOD}:${PASSWORD}" | base64 -w 0)@${SERVER_IP}:${IN_PORT}#Xray_Shadowsocks"
             blue "\n=============== Shadowsocks 客户端链接 ================"
             green "$SS_LINK"
             ;;
         "socks")
-            IN_PORT=$(grep '"port":' /root/Xray/config.json | head -1 | awk '{print $2}' | tr -d ',')
-            SOCKS_USER=$(grep -A10 'socks' /root/Xray/config.json | grep '"user":' | awk -F'"' '{print $4}')
-            SOCKS_PASSWORD=$(grep -A10 'socks' /root/Xray/config.json | grep '"pass":' | awk -F'"' '{print $4}')
+            IN_PORT=$(grep '"port":' /usr/local/etc/xray/config.json | head -1 | awk '{print $2}' | tr -d ',')
+            SOCKS_USER=$(grep -A10 'socks' /usr/local/etc/xray/config.json | grep '"user":' | awk -F'"' '{print $4}')
+            SOCKS_PASSWORD=$(grep -A10 'socks' /usr/local/etc/xray/config.json | grep '"pass":' | awk -F'"' '{print $4}')
             blue "\n=============== Socks5 客户端配置 ================"
             green "服务器地址: ${SERVER_IP}"
             green "端口: $IN_PORT"
@@ -1575,396 +1574,4 @@ show_anytls_links() {
             PASSWORD=$(grep 'command_args=' /etc/init.d/$SERVICE_NAME | grep -oE -- '-p "[^"]+"' | awk -F'"' '{print $2}')
             ;;
         "ubuntu"|"debian"|"centos")
-            PORT=$(grep 'ExecStart=' /etc/systemd/system/${SERVICE_NAME}.service | grep -oE -- '-l :[0-9]+' | awk -F':' '{print $2}')
-            PASSWORD=$(grep 'ExecStart=' /etc/systemd/system/${SERVICE_NAME}.service | grep -oE -- '-p "[^"]+"' | awk -F'"' '{print $2}')
-            ;;
-    esac
-
-    SERVER_IP=$(get_public_ip)
-    ANYTLS_LINK="anytls://${PASSWORD}@${SERVER_IP}:${PORT}#Anytls-Go"
-
-    blue "\n=============== AnyTLS-Go 客户端链接 ================"
-    green "$ANYTLS_LINK"
-    echo -e "${YELLOW}==============================================${NC}"
-    read -p "按回车键返回..."
-}
-
-# ============================== 服务控制函数 ==============================
-start_xray() {
-    if [ ! -f "/root/Xray/xray" ]; then
-        red "未找到 Xray 安装文件，请先安装 Xray！"
-        sleep 2
-        return
-    fi
-    case "$OS_TYPE" in
-        "alpine") service xray start ;;
-        "debian"|"ubuntu"|"centos") systemctl start xray ;;
-    esac
-    green "Xray 已启动"
-    sleep 2
-}
-
-stop_xray() {
-    if [ ! -f "/root/Xray/xray" ]; then
-        red "未找到 Xray 安装文件，请先安装 Xray！"
-        sleep 2
-        return
-    fi
-    case "$OS_TYPE" in
-        "alpine") service xray stop ;;
-        "debian"|"ubuntu"|"centos") systemctl stop xray ;;
-    esac
-    yellow "Xray 已停止"
-    sleep 2
-}
-
-restart_xray() {
-    if [ ! -f "/root/Xray/xray" ]; then
-        red "未找到 Xray 安装文件，请先安装 Xray！"
-        sleep 2
-        return
-    fi
-    case "$OS_TYPE" in
-        "alpine") service xray restart ;;
-        "debian"|"ubuntu"|"centos") systemctl restart xray ;;
-    esac
-    cyan "Xray 已重启"
-    sleep 2
-}
-
-start_hysteria2() {
-    if [ ! -f "/usr/local/bin/hysteria" ]; then
-        red "未找到 Hysteria2 安装文件，请先安装 Hysteria2！"
-        sleep 2
-        return
-    fi
-    case "$OS_TYPE" in
-        "alpine") service hysteria start ;;
-        "ubuntu"|"debian"|"centos") systemctl start hysteria ;;
-    esac
-    green "Hysteria 2 已启动"
-    sleep 2
-}
-
-stop_hysteria2() {
-    if [ ! -f "/usr/local/bin/hysteria" ]; then
-        red "未找到 Hysteria2 安装文件，请先安装 Hysteria2！"
-        sleep 2
-        return
-    fi
-    case "$OS_TYPE" in
-        "alpine") service hysteria stop ;;
-        "ubuntu"|"debian"|"centos") systemctl stop hysteria ;;
-    esac
-    yellow "Hysteria 2 已停止"
-    sleep 2
-}
-
-restart_hysteria2() {
-    if [ ! -f "/usr/local/bin/hysteria" ]; then
-        red "未找到 Hysteria2 安装文件，请先安装 Hysteria2！"
-        sleep 2
-        return
-    fi
-    case "$OS_TYPE" in
-        "alpine") service hysteria restart ;;
-        "ubuntu"|"debian"|"centos") systemctl restart hysteria ;;
-    esac
-    cyan "Hysteria 2 已重启"
-    sleep 2
-}
-
-start_anytls_go() {
-    SERVICE_NAME="anytls-server"
-    if [ ! -f "/usr/local/bin/$SERVICE_NAME" ]; then
-        red "未找到 AnyTLS-Go 安装文件，请先安装 AnyTLS-Go！"
-        sleep 2
-        return
-    fi
-    case "$OS_TYPE" in
-        "alpine") service $SERVICE_NAME start ;;
-        "ubuntu"|"debian"|"centos") systemctl start $SERVICE_NAME ;;
-    esac
-    green "AnyTLS-Go 已启动"
-    sleep 2
-}
-
-stop_anytls_go() {
-    SERVICE_NAME="anytls-server"
-    if [ ! -f "/usr/local/bin/$SERVICE_NAME" ]; then
-        red "未找到 AnyTLS-Go 安装文件，请先安装 AnyTLS-Go！"
-        sleep 2
-        return
-    fi
-    case "$OS_TYPE" in
-        "alpine") service $SERVICE_NAME stop ;;
-        "ubuntu"|"debian"|"centos") systemctl stop $SERVICE_NAME ;;
-    esac
-    yellow "AnyTLS-Go 已停止"
-    sleep 2
-}
-
-restart_anytls_go() {
-    SERVICE_NAME="anytls-server"
-    if [ ! -f "/usr/local/bin/$SERVICE_NAME" ]; then
-        red "未找到 AnyTLS-Go 安装文件，请先安装 AnyTLS-Go！"
-        sleep 2
-        return
-    fi
-    case "$OS_TYPE" in
-        "alpine") service $SERVICE_NAME restart ;;
-        "ubuntu"|"debian"|"centos") systemctl restart $SERVICE_NAME ;;
-    esac
-    cyan "AnyTLS-Go 已重启"
-    sleep 2
-}
-
-# ============================== 修改端口功能 ==============================
-change_port() {
-    echo -e "${YELLOW}请选择要修改端口的服务：${NC}"
-    echo "1. Xray"
-    echo "2. Hysteria2"
-    echo "3. AnyTLS-Go"
-    read -p "请选择 [1-3]: " service_choice
-
-    case $service_choice in
-        1)
-            if [ ! -f "/root/Xray/config.json" ]; then
-                red "未找到 Xray 配置文件，请先安装 Xray！"
-                sleep 2
-                return
-            fi
-            current_port=$(grep '"port":' /root/Xray/config.json | head -1 | awk '{print $2}' | tr -d ',')
-            green "当前 Xray 端口: $current_port"
-            read -p "请输入新的监听端口: " new_port
-            if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
-                red "无效的端口号！请输入 1-65535 之间的数字。"
-                sleep 2
-                return
-            fi
-            if lsof -i :$new_port >/dev/null 2>&1 || netstat -an | grep -q ":$new_port "; then
-                red "端口 $new_port 已被占用！"
-                sleep 2
-                return
-            fi
-            sed -i "s/\"port\": $current_port,/\"port\": $new_port,/" /root/Xray/config.json
-            restart_xray
-            green "Xray 端口已成功修改为: $new_port"
-            ;;
-        2)
-            if [ ! -f "/etc/hysteria/config.yaml" ]; then
-                red "未找到 Hysteria2 配置文件，请先安装 Hysteria2！"
-                sleep 2
-                return
-            fi
-            current_port=$(grep 'listen:' /etc/hysteria/config.yaml | awk '{print $2}' | tr -d ':')
-            green "当前 Hysteria2 端口: $current_port"
-            read -p "请输入新的监听端口: " new_port
-            if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
-                red "无效的端口号！"
-                sleep 2
-                return
-            fi
-            if lsof -i :$new_port >/dev/null 2>&1 || netstat -an | grep -q ":$new_port "; then
-                red "端口 $new_port 已被占用！"
-                sleep 2
-                return
-            fi
-            sed -i "s/listen: :$current_port/listen: :$new_port/" /etc/hysteria/config.yaml
-            restart_hysteria2
-            green "Hysteria2 端口已成功修改为: $new_port"
-            ;;
-        3)
-            SERVICE_NAME="anytls-server"
-            BINARY_PATH="/usr/local/bin/anytls-server"
-            if [ ! -f "$BINARY_PATH" ]; then
-                red "未找到 AnyTLS-Go 安装文件，请先安装 AnyTLS-Go！"
-                sleep 2
-                return
-            fi
-            case "$OS_TYPE" in
-                "alpine")
-                    current_port=$(grep 'command_args=' /etc/init.d/$SERVICE_NAME | grep -oE -- '-l :[0-9]+' | awk -F':' '{print $2}')
-                    ;;
-                "ubuntu"|"debian"|"centos")
-                    current_port=$(grep 'ExecStart=' /etc/systemd/system/${SERVICE_NAME}.service | grep -oE -- '-l :[0-9]+' | awk -F':' '{print $2}')
-                    ;;
-            esac
-            if [ -z "$current_port" ]; then
-                red "无法获取当前端口！"
-                sleep 2
-                return
-            fi
-            green "当前 AnyTLS-Go 端口: $current_port"
-            read -p "请输入新的监听端口: " new_port
-            if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
-                red "无效的端口号！"
-                sleep 2
-                return
-            fi
-            if lsof -i :$new_port >/dev/null 2>&1 || netstat -an | grep -q ":$new_port "; then
-                red "端口 $new_port 已被占用！"
-                sleep 2
-                return
-            fi
-            case "$OS_TYPE" in
-                "alpine")
-                    sed -i "s/-l :$current_port/-l :$new_port/" /etc/init.d/$SERVICE_NAME
-                    ;;
-                "ubuntu"|"debian"|"centos")
-                    sed -i "s/-l :$current_port/-l :$new_port/" /etc/systemd/system/${SERVICE_NAME}.service
-                    systemctl daemon-reload
-                    ;;
-            esac
-            restart_anytls_go
-            green "AnyTLS-Go 端口已成功修改为: $new_port"
-            ;;
-        *)
-            red "无效选择！"
-            ;;
-    esac
-    sleep 2
-}
-
-# ============================== 主菜单 ==============================
-show_menu() {
-    clear
-    echo -e "${CYAN}=============================================="
-    echo " 代理协议安装管理脚本"
-    echo " 支持系统: Alpine/Ubuntu/Debian/CentOS"
-    echo "=============================================="
-    echo -e "${NC} 安装与更新"
-    echo "=============================================="
-    echo -e "${YELLOW}1. 安装 Xray (VMess/Trojan/VLESS/Shadowsocks/Socks5)${NC}"
-    echo -e "${YELLOW}2. 安装 Hysteria 2 (UDP协议加速)${NC}"
-    echo -e "${YELLOW}3. 安装 AnyTLS-Go (TLS代理协议)${NC}"
-    echo "=============================================="
-    echo " 卸载服务"
-    echo "=============================================="
-    echo -e "${YELLOW}4. 卸载 Xray${NC}"
-    echo -e "${YELLOW}5. 卸载 Hysteria 2${NC}"
-    echo -e "${YELLOW}6. 卸载 AnyTLS-Go${NC}"
-    echo "=============================================="
-    echo " 配置管理"
-    echo "=============================================="
-    echo -e "${YELLOW}7. 查看 Xray 客户端链接${NC}"
-    echo -e "${YELLOW}8. 查看 Hysteria 2 客户端链接${NC}"
-    echo -e "${YELLOW}9. 查看 AnyTLS-Go 客户端链接${NC}"
-    echo -e "${YELLOW}10. 修改服务端口${NC}"
-    echo "=============================================="
-    echo " 服务控制"
-    echo "=============================================="
-    echo -e "${YELLOW}11. 启动 Xray${NC}"
-    echo -e "${YELLOW}12. 停止 Xray${NC}"
-    echo -e "${YELLOW}13. 重启 Xray${NC}"
-    echo -e "${YELLOW}14. 启动 Hysteria 2${NC}"
-    echo -e "${YELLOW}15. 停止 Hysteria 2${NC}"
-    echo -e "${YELLOW}16. 重启 Hysteria 2${NC}"
-    echo -e "${YELLOW}17. 启动 AnyTLS-Go${NC}"
-    echo -e "${YELLOW}18. 停止 AnyTLS-Go${NC}"
-    echo -e "${YELLOW}19. 重启 AnyTLS-Go${NC}"
-    echo "=============================================="
-    echo " 退出"
-    echo "=============================================="
-    echo -e "${YELLOW}0. 退出${NC}"
-    echo -e "${CYAN}=============================================="
-    echo -e "${NC}"
-
-    echo -e "${CYAN}当前服务状态:${NC}"
-    # Xray 状态
-    if [ -f "/root/Xray/xray" ]; then
-        case "$OS_TYPE" in
-            "alpine")
-                if rc-service xray status 2>/dev/null | grep -q "started"; then
-                    echo -e " Xray: ${GREEN}已安装并运行中${NC}"
-                else
-                    echo -e " Xray: ${YELLOW}已安装但未运行${NC}"
-                fi
-                ;;
-            "debian"|"ubuntu"|"centos")
-                if systemctl is-active --quiet xray; then
-                    echo -e " Xray: ${GREEN}已安装并运行中${NC}"
-                else
-                    echo -e " Xray: ${YELLOW}已安装但未运行${NC}"
-                fi
-                ;;
-        esac
-    else
-        echo -e " Xray: ${RED}未安装${NC}"
-    fi
-
-    # Hysteria2 状态
-    if [ -f "/usr/local/bin/hysteria" ]; then
-        case "$OS_TYPE" in
-            "alpine")
-                if rc-service hysteria status 2>/dev/null | grep -q "started"; then
-                    echo -e " Hysteria2: ${GREEN}已安装并运行中${NC}"
-                else
-                    echo -e " Hysteria2: ${YELLOW}已安装但未运行${NC}"
-                fi
-                ;;
-            "ubuntu"|"debian"|"centos")
-                if systemctl is-active --quiet hysteria; then
-                    echo -e " Hysteria2: ${GREEN}已安装并运行中${NC}"
-                else
-                    echo -e " Hysteria2: ${YELLOW}已安装但未运行${NC}"
-                fi
-                ;;
-        esac
-    else
-        echo -e " Hysteria2: ${RED}未安装${NC}"
-    fi
-
-    # AnyTLS-Go 状态
-    if [ -f "/usr/local/bin/anytls-server" ]; then
-        case "$OS_TYPE" in
-            "alpine")
-                if rc-service anytls-server status 2>/dev/null | grep -q "started"; then
-                    echo -e " AnyTLS-Go: ${GREEN}已安装并运行中${NC}"
-                else
-                    echo -e " AnyTLS-Go: ${YELLOW}已安装但未运行${NC}"
-                fi
-                ;;
-            "ubuntu"|"debian"|"centos")
-                if systemctl is-active --quiet anytls-server; then
-                    echo -e " AnyTLS-Go: ${GREEN}已安装并运行中${NC}"
-                else
-                    echo -e " AnyTLS-Go: ${YELLOW}已安装但未运行${NC}"
-                fi
-                ;;
-        esac
-    else
-        echo -e " AnyTLS-Go: ${RED}未安装${NC}"
-    fi
-
-    echo -e "${CYAN}=============================================="
-    echo -e "${NC}"
-
-    read -p "请选择操作 [0-19]: " choice
-    case $choice in
-        1) install_xray ; show_menu ;;
-        2) install_hysteria2 ; show_menu ;;
-        3) install_anytls_go ; show_menu ;;
-        4) uninstall_xray ; show_menu ;;
-        5) uninstall_hysteria2 ; show_menu ;;
-        6) uninstall_anytls_go ; show_menu ;;
-        7) show_xray_links ; show_menu ;;
-        8) show_hysteria_links ; show_menu ;;
-        9) show_anytls_links ; show_menu ;;
-        10) change_port ; show_menu ;;
-        11) start_xray ; show_menu ;;
-        12) stop_xray ; show_menu ;;
-        13) restart_xray ; show_menu ;;
-        14) start_hysteria2 ; show_menu ;;
-        15) stop_hysteria2 ; show_menu ;;
-        16) restart_hysteria2 ; show_menu ;;
-        17) start_anytls_go ; show_menu ;;
-        18) stop_anytls_go ; show_menu ;;
-        19) restart_anytls_go ; show_menu ;;
-        0) exit 0 ;;
-        *) red "无效选择，请重新输入"; sleep 1; show_menu ;;
-    esac
-}
-
-# 启动主菜单
-show_menu
+            PORT=$(grep 'ExecStart
