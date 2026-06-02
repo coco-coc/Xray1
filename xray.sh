@@ -161,11 +161,17 @@ install_xray() {
             exit 1
         fi
 
-        # 兼容多种输出格式：PrivateKey/secret, PublicKey/Hash32/public key
-        PRIVATE_KEY=$(echo "$keys_output" | grep -iE '^\s*(PrivateKey|secret)\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
-        PUBLIC_KEY=$(echo "$keys_output" | grep -iE '^\s*Hash32\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
+        # 提取私钥（兼容多种表述）
+        PRIVATE_KEY=$(echo "$keys_output" | grep -iE '^\s*(PrivateKey|private key|secret)\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
+
+        # 【修复】优先提取真正的公钥 Public key，避免误用 Hash32
+        PUBLIC_KEY=$(echo "$keys_output" | grep -iE '^\s*(Public key|PublicKey|public key)\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
         if [[ -z "$PUBLIC_KEY" ]]; then
-            PUBLIC_KEY=$(echo "$keys_output" | grep -iE '^\s*(PublicKey|public key)\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
+            # 极个别旧版本只有 Hash32，但这不是标准公钥，仅作降级尝试并警告
+            PUBLIC_KEY=$(echo "$keys_output" | grep -iE '^\s*Hash32\s*:' | head -1 | awk -F ':' '{print $2}' | tr -d '[:space:]')
+            if [[ -n "$PUBLIC_KEY" ]]; then
+                yellow "警告: 仅提取到 Hash32，这可能不是真正的公钥，建议升级 Xray 或手动指定公钥"
+            fi
         fi
 
         if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
@@ -544,7 +550,7 @@ EOF
             ;;
         "vless")
             if [[ "$VLESS_TYPE" == "Reality" ]]; then
-                # 修复：shortIds 至少需要一个值，常用空字符串 ""
+                # 【修复】shortIds 不能为空数组，至少需要一个值，常用空字符串
                 cat << EOF > "$XRAY_CONFIG_FILE"
 {
     "log": {
@@ -728,7 +734,7 @@ generate_links() {
             ;;
         "vless")
             if [[ "$VLESS_TYPE" == "Reality" ]]; then
-                # 修复：添加 sid= 参数，与短 ID 空字符串对应
+                # 【修复】添加 sid 参数，与 shortIds:[""] 匹配
                 local VLESS_LINK="vless://${UUID}@${SERVER_IP}:${IN_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DEST_SERVER}&fp=chrome&pbk=${PUBLIC_KEY}&sid=&type=tcp&headerType=none&packetEncoding=xudp#Vless-Reality"
                 green "VLESS (Reality) 链接：\n$VLESS_LINK"
             else
